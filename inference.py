@@ -12,10 +12,10 @@ from model import PSPNet101, PSPNet50
 from tools import *
 
 ADE20k_param = {'crop_size': [473, 473],
-                'num_classes': 150, 
+                'num_classes': 4, 
                 'model': PSPNet50}
-cityscapes_param = {'crop_size': [720, 720],
-                    'num_classes': 19,
+cityscapes_param = {'crop_size': [360,480],#[720, 720],
+                    'num_classes': 4,
                     'model': PSPNet101}
 
 SAVE_DIR = './output/'
@@ -23,15 +23,15 @@ SNAPSHOT_DIR = './model/'
 
 def get_arguments():
     parser = argparse.ArgumentParser(description="Reproduced PSPNet")
-    parser.add_argument("--img-path", type=str, default='',
+    parser.add_argument("--img-path", type=str, default='/home/liushixin/AI/chendali/shengjunGao/DataSet/IronData_Camvid/testing/imgs/9_315.jpg',
                         help="Path to the RGB image file.")
     parser.add_argument("--checkpoints", type=str, default=SNAPSHOT_DIR,
                         help="Path to restore weights.")
     parser.add_argument("--save-dir", type=str, default=SAVE_DIR,
                         help="Path to save output.")
-    parser.add_argument("--flipped-eval", action="store_true",
+    parser.add_argument("---eval", action="store_true",
                         help="whether to evaluate with flipped img.")
-    parser.add_argument("--dataset", type=str, default='',
+    parser.add_argument("--dataset", type=str, default='cityscapes',
                         choices=['ade20k', 'cityscapes'],
                         required=True)
 
@@ -79,7 +79,8 @@ def main():
     raw_output = net.layers['conv6']
     
     # Do flipped eval or not
-    if args.flipped_eval:
+    if False:
+    #if args.flipped_eval:
         flipped_output = tf.image.flip_left_right(tf.squeeze(net2.layers['conv6']))
         flipped_output = tf.expand_dims(flipped_output, dim=0)
         raw_output = tf.add_n([raw_output, flipped_output])

@@ -96,22 +96,38 @@ class ImageReader(object):
        masks from the disk, and enqueues them into a TensorFlow queue.
     '''
 
-    def __init__(self, data_dir, data_list, input_size,
+    def __init__(self, data_dir, data_list, data_test_list,input_size,
                   random_scale, random_mirror, ignore_label, img_mean, coord):
 
         self.data_dir = data_dir
         self.data_list = data_list
+        self.data_test_list = data_test_list
         self.input_size = input_size
         self.coord = coord
 
         self.image_list, self.label_list = read_labeled_image_list(self.data_dir, self.data_list)
-        self.images = tf.convert_to_tensor(self.image_list, dtype=tf.string)
-        self.labels = tf.convert_to_tensor(self.label_list, dtype=tf.string)
-        self.queue = tf.train.slice_input_producer([self.images, self.labels],
-                                                   shuffle=input_size is not None) # not shuffling if it is val
-        self.image, self.label = read_images_from_disk(self.queue, self.input_size, random_scale, random_mirror, ignore_label, img_mean)
+        self.image_test_list,self.label_test_list = read_labeled_image_list(self.data_dir,self.data_test_list)
+        for ii in self.image_test_list:
+            self.image_list.append(ii)
+        for jj in self.label_test_list:
+            self.label_list.append(jj)
+        
+        self.images_train = tf.convert_to_tensor(self.image_list[0:1600], dtype=tf.string)
+        self.labels_train = tf.convert_to_tensor(self.label_list[0:1600], dtype=tf.string)
+        self.queue_train = tf.train.slice_input_producer([self.images_train,self.labels_train],shuffle=False)
+                                                   #shuffle=input_size is not None) # not shuffling if it is val                                           
+        self.image_train, self.label_train = read_images_from_disk(self.queue_train, self.input_size, random_scale, random_mirror, ignore_label, img_mean)
+        
+        
+        self.images_test = tf.convert_to_tensor(self.image_list[1600:2001], dtype=tf.string)
+        self.labels_test = tf.convert_to_tensor(self.label_list[1600:2001], dtype=tf.string)
+        self.queue_test = tf.train.slice_input_producer([self.images_test,self.labels_test],shuffle=False)
+        self.image_test, self.label_test = read_images_from_disk(self.queue_test, self.input_size, random_scale, random_mirror, ignore_label, img_mean)
 
     def dequeue(self, num_elements):
-        image_batch, label_batch = tf.train.batch([self.image, self.label],
+        image_batch, label_batch = tf.train.batch([self.image_train, self.label_train],
                                                   num_elements)
-        return image_batch, label_batch
+        image_test_batch,label_test_batch = tf.train.batch([self.image_test, self.label_test],
+                                                  num_elements)
+        return image_batch, label_batch,image_test_batch,label_test_batch
+        

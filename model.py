@@ -437,7 +437,8 @@ class PSPNet101(Network):
         shape = tf.shape(conv5_3)[1:3]
 
         (self.feed('conv5_3/relu')
-             .avg_pool(90, 90, 90, 90, name='conv5_3_pool1')
+             #.avg_pool(90, 90, 90, 90, name='conv5_3_pool1')
+             .avg_pool(45, 45, 45, 45, name='conv5_3_pool1')
              .conv(1, 1, 512, 1, 1, biased=False, relu=False, name='conv5_3_pool1_conv')
              .batch_normalization(relu=True, name='conv5_3_pool1_conv_bn')
              .resize_bilinear(shape, name='conv5_3_pool1_interp'))

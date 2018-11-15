@@ -11,22 +11,26 @@ import time
 
 import tensorflow as tf
 import numpy as np
-
+import matplotlib
+matplotlib.use('Agg')
+from matplotlib.pyplot import plot,savefig,xlabel,ylabel,title,legend
 from model import PSPNet101
 from tools import prepare_label
 from image_reader import ImageReader
-
+#IMG_MEAN = np.array((0.000, 0.000, 0.000), dtype=np.float32)
 IMG_MEAN = np.array((103.939, 116.779, 123.68), dtype=np.float32)
 
-BATCH_SIZE = 2
-DATA_DIRECTORY = '/SSD_data/cityscapes_dataset/cityscape'
-DATA_LIST_PATH = './list/cityscapes_train_list.txt'
+BATCH_SIZE = 4
+DATA_DIRECTORY = ''
+DATA_LIST_PATH = './list/train.txt'
+DATA_LISTPATH_TEST = './list/test.txt'
 IGNORE_LABEL = 255
-INPUT_SIZE = '713,713'
+INPUT_SIZE = '360,480'
+
 LEARNING_RATE = 1e-3
 MOMENTUM = 0.9
-NUM_CLASSES = 19
-NUM_STEPS = 60001
+NUM_CLASSES = 4
+NUM_STEPS = 12001
 POWER = 0.9
 RANDOM_SEED = 1234
 WEIGHT_DECAY = 0.0001
@@ -44,6 +48,9 @@ def get_arguments():
                         help="Path to the directory containing the PASCAL VOC dataset.")
     parser.add_argument("--data-list", type=str, default=DATA_LIST_PATH,
                         help="Path to the file listing the images in the dataset.")
+    parser.add_argument("--data-test-list", type=str, default=DATA_LISTPATH_TEST,
+                        help="Path to the file listing the images in the dataset.")                        
+                        
     parser.add_argument("--ignore-label", type=int, default=IGNORE_LABEL,
                         help="The index of the label to ignore during the training.")
     parser.add_argument("--input-size", type=str, default=INPUT_SIZE,
@@ -96,14 +103,12 @@ def save(saver, sess, logdir, step):
 def load(saver, sess, ckpt_path):
     saver.restore(sess, ckpt_path)
     print("Restored model parameters from {}".format(ckpt_path))
-
 def main():
     """Create the model and start the training."""
     args = get_arguments()
     
     h, w = map(int, args.input_size.split(','))
     input_size = (h, w)
-    
     tf.set_random_seed(args.random_seed)
     
     coord = tf.train.Coordinator()
@@ -112,18 +117,25 @@ def main():
         reader = ImageReader(
             args.data_dir,
             args.data_list,
+            args.data_test_list,
             input_size,
             args.random_scale,
             args.random_mirror,
             args.ignore_label,
             IMG_MEAN,
             coord)
-        image_batch, label_batch = reader.dequeue(args.batch_size)
+        image_batch, label_batch,image_test_batch, label_test_batch= reader.dequeue(args.batch_size)
+    def f1():
+        return image_test_batch
+    def f2():
+        return image_batch
+    print('11111111:',image_test_batch)
+    #{'data':image_batch[0:1600] },
+    step_ph = tf.placeholder(dtype=tf.float32, shape=())
+    signal = tf.placeholder(tf.bool, shape=[])
     
-    net = PSPNet101({'data': image_batch}, is_training=True, num_classes=args.num_classes)
-    
+    net = PSPNet101({'data':tf.cond(signal,f1, f2 )}, is_training=True, num_classes=args.num_classes)
     raw_output = net.layers['conv6']
-
     # According from the prototxt in Caffe implement, learning rate must multiply by 10.0 in pyramid module
     fc_list = ['conv5_3_pool1_conv', 'conv5_3_pool2_conv', 'conv5_3_pool3_conv', 'conv5_3_pool6_conv', 'conv6', 'conv5_4']
     restore_var = [v for v in tf.global_variables()]
@@ -138,19 +150,32 @@ def main():
     # Predictions: ignoring all predictions with labels greater or equal than n_classes
     raw_prediction = tf.reshape(raw_output, [-1, args.num_classes])
     label_proc = prepare_label(label_batch, tf.stack(raw_output.get_shape()[1:3]), num_classes=args.num_classes, one_hot=False) # [batch_size, h, w]
+    test_label_proc = prepare_label(label_test_batch, tf.stack(raw_output.get_shape()[1:3]), num_classes=args.num_classes, one_hot=False) # [batch_size, h, w]
+    
+    
     raw_gt = tf.reshape(label_proc, [-1,])
+    test_raw_gt = tf.reshape(test_label_proc, [-1,])
+    
     indices = tf.squeeze(tf.where(tf.less_equal(raw_gt, args.num_classes - 1)), 1)
+    test_indices = tf.squeeze(tf.where(tf.less_equal(test_raw_gt, args.num_classes - 1)), 1)
+    
     gt = tf.cast(tf.gather(raw_gt, indices), tf.int32)
+    test_gt = tf.cast(tf.gather(test_raw_gt, test_indices), tf.int32)
+    
     prediction = tf.gather(raw_prediction, indices)
-                                                                                            
+    test_prediction=tf.gather(raw_prediction, test_indices)
+    #test_prediction= tf.gather(raw_prediction, test_indices)                                                                                        
     # Pixel-wise softmax loss.
     loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=prediction, labels=gt)
+    test_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=test_prediction, labels=test_gt)
+    
     l2_losses = [args.weight_decay * tf.nn.l2_loss(v) for v in tf.trainable_variables() if 'weights' in v.name]
     reduced_loss = tf.reduce_mean(loss) + tf.add_n(l2_losses)
+    test_reduced_loss = tf.reduce_mean(test_loss) + tf.add_n(l2_losses)
 
     # Using Poly learning rate policy 
     base_lr = tf.constant(args.learning_rate)
-    step_ph = tf.placeholder(dtype=tf.float32, shape=())
+    #step_ph = tf.placeholder(dtype=tf.float32, shape=())
     learning_rate = tf.scalar_mul(base_lr, tf.pow((1 - step_ph / args.num_steps), args.power))
     
     # Gets moving_mean and moving_variance update operations from tf.GraphKeys.UPDATE_OPS
@@ -165,13 +190,25 @@ def main():
         opt_fc_b = tf.train.MomentumOptimizer(learning_rate * 20.0, args.momentum)
 
         grads = tf.gradients(reduced_loss, conv_trainable + fc_w_trainable + fc_b_trainable)
+        #test_grads = tf.gradients(reduced_loss, conv_trainable + fc_w_trainable + fc_b_trainable) 
+        
         grads_conv = grads[:len(conv_trainable)]
+        #test_grads_conv = test_grads[:len(conv_trainable)]
+        
         grads_fc_w = grads[len(conv_trainable) : (len(conv_trainable) + len(fc_w_trainable))]
+        #test_grads_fc_w = test_grads[len(conv_trainable) : (len(conv_trainable) + len(fc_w_trainable))]
+        
         grads_fc_b = grads[(len(conv_trainable) + len(fc_w_trainable)):]
+        #test_grads_fc_b = test_grads[(len(conv_trainable) + len(fc_w_trainable)):]
 
         train_op_conv = opt_conv.apply_gradients(zip(grads_conv, conv_trainable))
         train_op_fc_w = opt_fc_w.apply_gradients(zip(grads_fc_w, fc_w_trainable))
         train_op_fc_b = opt_fc_b.apply_gradients(zip(grads_fc_b, fc_b_trainable))
+        
+        #test_op_conv = opt_conv.apply_gradients(zip(test_grads_conv, conv_trainable))
+        #test_op_fc_w = opt_fc_w.apply_gradients(zip(grads_fc_w, fc_w_trainable))
+        #test_op_fc_b = opt_fc_b.apply_gradients(zip(grads_fc_b, fc_b_trainable))
+        
 
         train_op = tf.group(train_op_conv, train_op_fc_w, train_op_fc_b)
         
@@ -182,7 +219,7 @@ def main():
     init = tf.global_variables_initializer()
     
     sess.run(init)
-    
+    sess.run(tf.local_variables_initializer())
     # Saver for storing checkpoints of the model.
     saver = tf.train.Saver(var_list=tf.global_variables(), max_to_keep=10)
 
@@ -197,20 +234,41 @@ def main():
 
     # Start queue threads.
     threads = tf.train.start_queue_runners(coord=coord, sess=sess)
-
+    steps = []
+    losses = []
+    val_steps = []
+    val_losses = []
+    val_step = 0
     # Iterate over training steps.
     for step in range(args.num_steps):
         start_time = time.time()
         
-        feed_dict = {step_ph: step}
+        feed_dict = {step_ph: step,signal:step%2==0}
         if step % args.save_pred_every == 0:
             loss_value, _ = sess.run([reduced_loss, train_op], feed_dict=feed_dict)
             save(saver, sess, args.snapshot_dir, step)
         else:
             loss_value, _ = sess.run([reduced_loss, train_op], feed_dict=feed_dict)
         duration = time.time() - start_time
-        print('step {:d} \t loss = {:.3f}, ({:.3f} sec/step)'.format(step, loss_value, duration))
+        if step %100 ==0:
+            loss_value_test = sess.run(test_reduced_loss, feed_dict=feed_dict)
+            print('val_step {:d} \t val_loss = {:.3f}'.format(val_step, loss_value_test))
+        val_step = val_step + 1
+        if step % 50 ==0:
+            print('step {:d} \t loss = {:.3f}, ({:.3f} sec/step)'.format(step, loss_value, duration))    
         
+        steps.append(step)
+        val_steps.append(val_step)
+        losses.append(loss_value)
+        val_losses.append(loss_value_test)
+        
+    plot(steps,losses,color='r',label='train_loss')
+    plot(val_steps,val_losses,color = 'g',label='val_loss')
+    xlabel('epoch')
+    ylabel('value')
+    title('Train-Val-Loss')
+    legend(loc='best')
+    savefig('./result.jpg')
     coord.request_stop()
     coord.join(threads)
     
