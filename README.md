@@ -110,3 +110,5 @@ Semantic Understanding of Scenes through ADE20K Dataset. B. Zhou, H. Zhao, X. Pu
       journal={arXiv preprint arXiv:1608.05442},
       year={2016}
     }
+    
+ 原github网址：https://github.com/hellochick/PSPNet-tensorflow
